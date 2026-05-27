@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 15, 23, 42;
+  --background-rgb: 248, 250, 252;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+}
+
+@layer components {
+  .input {
+    @apply w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white
+           focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400
+           transition-colors placeholder:text-slate-400;
+  }
+}
