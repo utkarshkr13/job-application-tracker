@@ -102,7 +102,7 @@ export async function syncOutlook(maxResults = 100): Promise<ParsedOutlookJob[]>
         const from = msg.envelope?.from?.[0];
         if (!from) continue;
 
-        const fromStr = `${from.name ?? ''} <${from.mailbox}@${from.host}>`;
+        const fromStr = `${from.name ?? ''} <${from.address ?? ''}>`;
         const date = msg.envelope.date ?? new Date();
 
         // Deduplicate by sender+subject (Outlook sometimes duplicates)

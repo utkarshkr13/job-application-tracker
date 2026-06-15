@@ -106,7 +106,7 @@ export async function syncGmail(maxResults = 100): Promise<ParsedGmailJob[]> {
         const from = msg.envelope?.from?.[0];
         if (!from) continue;
 
-        const fromStr = `${from.name ?? ''} <${from.mailbox}@${from.host}>`;
+        const fromStr = `${from.name ?? ''} <${from.address ?? ''}>`;
         const date = msg.envelope.date ?? new Date();
 
         jobs.push({
