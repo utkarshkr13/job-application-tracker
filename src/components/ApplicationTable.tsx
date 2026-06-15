@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import type { Application, ApplicationStatus } from '@/types';
 import { StatusBadge } from './StatusBadge';
-import { Pencil, Trash2, ExternalLink, ChevronUp, ChevronDown, Mail } from 'lucide-react';
+import { Pencil, Trash2, ExternalLink, ChevronUp, ChevronDown, Mail, SendHorizonal } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface Props {
@@ -14,6 +14,24 @@ interface Props {
 }
 
 const STATUS_OPTIONS: ApplicationStatus[] = ['applied', 'confirmed', 'rejected', 'no_response'];
+
+function buildApplyLink(company: string, position: string): string {
+  const subject = `Application for ${position} at ${company}`;
+  const body = [
+    `Hi,`,
+    ``,
+    `I am writing to express my interest in the ${position} role at ${company}.`,
+    ``,
+    `I have attached my resume and cover letter for your review. I would love the opportunity to discuss how my experience aligns with this role.`,
+    ``,
+    `Please feel free to reach out if you need any additional information.`,
+    ``,
+    `Looking forward to hearing from you.`,
+    ``,
+    `Best regards,`,
+  ].join('\n');
+  return `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
 
 function buildMailtoLink(company: string, position: string, appliedDate: string): string {
   const subject = `Following up on my ${position} application at ${company}`;
@@ -122,7 +140,7 @@ export function ApplicationTable({ applications, onDelete, onStatusChange }: Pro
                     </span>
                   </th>
                 ))}
-                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider w-28">Actions</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider w-32">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -152,6 +170,14 @@ export function ApplicationTable({ applications, onDelete, onStatusChange }: Pro
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
+                      {/* Apply by email — initial application email */}
+                      <a
+                        href={buildApplyLink(app.company, app.position)}
+                        title="Apply by email"
+                        className="p-1.5 rounded hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 transition-colors"
+                      >
+                        <SendHorizonal className="w-3.5 h-3.5" />
+                      </a>
                       {/* Follow-up email — opens native mail app with pre-filled subject + body */}
                       <a
                         href={buildMailtoLink(
