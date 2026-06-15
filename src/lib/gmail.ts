@@ -94,7 +94,7 @@ export async function syncGmail(maxResults = 100): Promise<ParsedGmailJob[]> {
     try {
       // Look back 90 days
       const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const allUids = await client.search({ since }, { uid: true });
+      const allUids = (await client.search({ since }, { uid: true })) || [];
 
       // Fetch only the most recent slice to stay performant
       const uidsToFetch = allUids.slice(-maxResults * 8);

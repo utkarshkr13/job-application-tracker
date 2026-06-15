@@ -92,7 +92,7 @@ export async function syncOutlook(maxResults = 100): Promise<ParsedOutlookJob[]>
     const lock = await client.getMailboxLock('INBOX');
     try {
       const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const allUids = await client.search({ since }, { uid: true });
+      const allUids = (await client.search({ since }, { uid: true })) || [];
       const uidsToFetch = allUids.slice(-maxResults * 8);
 
       for await (const msg of client.fetch(uidsToFetch, { envelope: true, uid: true })) {
