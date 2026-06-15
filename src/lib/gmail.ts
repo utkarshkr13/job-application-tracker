@@ -1,54 +1,131 @@
+/**
+ * Gmail email sync helper.
+ *
+ * Uses IMAP with a Gmail App Password — no OAuth tokens, no expiry.
+ *
+ * One-time setup (2 min):
+ * 1. Enable 2-Step Verification at myaccount.google.com/security
+ * 2. Go to myaccount.google.com/apppasswords
+ * 3. Click "Create App Password" → name it anything (e.g. "Job Tracker")
+ * 4. Copy the 16-character password
+ * 5. Set GMAIL_USER=you@gmail.com and GMAIL_APP_PASSWORD=xxxx in .env.local
+ */
+
 import type { ApplicationStatus } from '@/types';
 
-const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1';
-const TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const SEARCH_QUERY = 'subject:(application OR applied OR "job application" OR interview OR offer OR rejected OR "thank you for applying" OR "we received your" OR "next steps")';
+const JOB_SUBJECT_REGEX =
+  /application|applied|interview|offer|rejected|thank you for applying|we received|next steps|your candidacy|hiring|position|candidate/i;
 
-async function getAccessToken(): Promise<string> {
-  const res = await fetch(TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID!, client_secret: process.env.GOOGLE_CLIENT_SECRET!, refresh_token: process.env.GOOGLE_REFRESH_TOKEN!, grant_type: 'refresh_token' }) });
-  const json = await res.json();
-  if (!json.access_token) throw new Error('Failed to get Google access token');
-  return json.access_token;
+export interface ParsedGmailJob {
+  company: string;
+  position: string;
+  applied_date: string;
+  status: ApplicationStatus;
+  source: 'gmail';
+  email_id: string;
 }
 
-function classifyStatus(subject: string, snippet: string): ApplicationStatus {
-  const text = `${subject} ${snippet}`.toLowerCase();
-  if (/interview|next steps|we.d like to|offer letter|pleased to|congratulations/i.test(text)) return 'confirmed';
-  if (/not moving forward|other candidates|unfortunately|regret to inform|not selected|not a fit/i.test(text)) return 'rejected';
-  if (/thank you for applying|application received|we received your|we.ve received/i.test(text)) return 'applied';
+function classifyStatus(subject: string): ApplicationStatus {
+  const text = subject.toLowerCase();
+
+  if (/interview|next steps|we.d like to|offer letter|pleased to|congratulations|move forward|excited to meet|selected/i.test(text))
+    return 'confirmed';
+  if (/not moving forward|other candidates|unfortunately|regret to inform|not selected|not a fit|decided to pursue|will not|won.t be/i.test(text))
+    return 'rejected';
+  if (/thank you for applying|application received|we received your|we.ve received|successfully submitted|received your application/i.test(text))
+    return 'applied';
+
   return 'no_response';
 }
 
 function extractCompany(from: string): string {
-  const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
-  if (nameMatch) return nameMatch[1].trim().replace(/^(careers? at |jobs? at |recruiting at )/i, '').trim();
-  const domainMatch = from.match(/@([^.>]+)\./);
-  return domainMatch ? domainMatch[1] : 'Unknown';
+  // Try sender display name first: "Acme Careers <jobs@acme.com>"
+  const nameMatch = from.match(/^"?([^"<@\n]+)"?\s*</);
+  if (nameMatch) {
+    const name = nameMatch[1].trim();
+    const cleaned = name.replace(/^(careers? at |jobs? at |recruiting at |talent at |hr at |no.?reply.*?[-–]\s*)/i, '').trim();
+    if (cleaned.length > 1) return cleaned;
+  }
+  // Fall back to domain (acme.com → Acme)
+  const domainMatch = from.match(/@([^.>\s]+)\./);
+  if (domainMatch) {
+    const d = domainMatch[1];
+    return d.charAt(0).toUpperCase() + d.slice(1);
+  }
+  return 'Unknown';
 }
 
-export interface ParsedGmailJob { company: string; position: string; applied_date: string; status: ApplicationStatus; source: 'gmail'; email_id: string; }
+function extractPosition(subject: string): string {
+  const clean = subject.replace(/^(re:|fwd?:|fw:|re\[[\d]+\]:)\s*/gi, '').trim();
 
-export async function syncGmail(maxResults = 50): Promise<ParsedGmailJob[]> {
-  const token = await getAccessToken();
-  const listRes = await fetch(`${GMAIL_API}/users/me/threads?q=${encodeURIComponent(SEARCH_QUERY)}&maxResults=${maxResults}`, { headers: { Authorization: `Bearer ${token}` } });
-  const { threads = [] } = await listRes.json();
+  // "Application for Software Engineer at Acme" → "Software Engineer"
+  const atMatch = clean.match(
+    /(?:application|applied|candidacy|position|role|opportunity)\s+(?:for\s+)?(?:the\s+)?(.{3,60}?)\s+(?:at|@|with|-|–)\s+/i
+  );
+  if (atMatch) return atMatch[1].trim();
+
+  // "Software Engineer – Application Received"
+  const dashMatch = clean.match(/^(.{5,60}?)\s*[-–|]\s*(?:application|interview|offer|job)/i);
+  if (dashMatch) return dashMatch[1].trim();
+
+  return clean.substring(0, 80);
+}
+
+export async function syncGmail(maxResults = 100): Promise<ParsedGmailJob[]> {
+  const { ImapFlow } = await import('imapflow');
+
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
+  if (!user || !pass) throw new Error('GMAIL_USER or GMAIL_APP_PASSWORD not configured');
+
+  const client = new ImapFlow({
+    host: 'imap.gmail.com',
+    port: 993,
+    secure: true,
+    auth: { user, pass },
+    logger: false,
+  });
+
   const jobs: ParsedGmailJob[] = [];
-  for (const thread of threads) {
+
+  await client.connect();
+  try {
+    const lock = await client.getMailboxLock('INBOX');
     try {
-      const threadRes = await fetch(`${GMAIL_API}/users/me/threads/${thread.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`, { headers: { Authorization: `Bearer ${token}` } });
-      const threadJson = await threadRes.json();
-      const firstMsg = threadJson.messages?.[0];
-      if (!firstMsg) continue;
-      const headers = firstMsg.payload.headers;
-      const subject = headers.find((h: {name:string;value:string}) => h.name === 'Subject')?.value ?? '';
-      const from = headers.find((h: {name:string;value:string}) => h.name === 'From')?.value ?? '';
-      const date = headers.find((h: {name:string;value:string}) => h.name === 'Date')?.value ?? '';
-      const parsed = new Date(date);
-      jobs.push({ company: extractCompany(from), position: subject.replace(/re:\s*/i, '').substring(0, 80),
-        applied_date: isNaN(parsed.getTime()) ? new Date().toISOString().split('T')[0] : parsed.toISOString().split('T')[0],
-        status: classifyStatus(subject, thread.snippet), source: 'gmail', email_id: `gmail_${thread.id}` });
-    } catch { /* skip malformed */ }
+      // Look back 90 days
+      const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const allUids = await client.search({ since }, { uid: true });
+
+      // Fetch only the most recent slice to stay performant
+      const uidsToFetch = allUids.slice(-maxResults * 8);
+
+      for await (const msg of client.fetch(uidsToFetch, { envelope: true, uid: true })) {
+        const subject = msg.envelope?.subject ?? '';
+        if (!JOB_SUBJECT_REGEX.test(subject)) continue;
+
+        const from = msg.envelope?.from?.[0];
+        if (!from) continue;
+
+        const fromStr = `${from.name ?? ''} <${from.mailbox}@${from.host}>`;
+        const date = msg.envelope.date ?? new Date();
+
+        jobs.push({
+          email_id: `gmail_${msg.uid}`,
+          company: extractCompany(fromStr),
+          position: extractPosition(subject),
+          applied_date: date.toISOString().split('T')[0],
+          status: classifyStatus(subject),
+          source: 'gmail',
+        });
+
+        if (jobs.length >= maxResults) break;
+      }
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout();
   }
+
   return jobs;
 }
